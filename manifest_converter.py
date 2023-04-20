@@ -52,8 +52,8 @@ def parse_data(file_path):
         ID = data[0]
         size = data[1].split("[")[0]
         data = line.split("'")
-        key_start = int(data[1], 16)
-        key_end = int(data[3], 16)
+        key_start = data[1]
+        key_end = data[3]
         
         manifest.append(SSTInfo(ID, level, size, key_start, key_end))
         if key_start not in key_list:
@@ -68,24 +68,46 @@ def parse_data(file_path):
       line = f.readline()
   
   f.close()
-  key_list.sort()
   
-  return key_list, manifest
+  common_suffix = ''
+  min_len = min(map(len, key_list))
+  
+  for i in range(1, min_len + 1):
+    if len(set(s[-i] for s in key_list)) == 1:
+      common_suffix = key_list[0][-i] + common_suffix
+    else:
+      break
+  
+  print(common_suffix)
+  
+  int_key_list = []
+  length = len(common_suffix)
+  for item in key_list:
+    l = len(item) - length
+    int_key_list.append(int(item[:l], 16))
+  
+  int_key_list.sort()
+  
+  return int_key_list, manifest, common_suffix
  
 def process(args):
-  key_list, manifest = parse_data(args.file)
+  key_list, manifest, common_suffix = parse_data(args.file)
+  
+  min_val = min(key_list)
   
   key_dict = {}
-  index = 0
   for item in key_list:
-    key_dict[item] = index
-    index += 1
+    key_dict[item] = item - min_val + 1
    
   f = open(OUTPUT, 'w')
   f.write("SSTID level size key_start key_end\n")
   
   for item in manifest:
-    f.write("{} {} {} {} {}\n".format(item.ID, item.level, item.size, key_dict[item.key_start], key_dict[item.key_end]))
+    l = len(item.key_start) - len(common_suffix)
+    start_val = int(item.key_start[:l], 16)
+    l = len(item.key_end) - len(common_suffix)
+    end_val = int(item.key_end[:l], 16)
+    f.write("{} {} {} {} {}\n".format(item.ID, item.level, item.size, key_dict[start_val], key_dict[end_val]))
     
   f.close()
 
