@@ -9,12 +9,29 @@ VERBOSE = None
 OUTPUT = None
 
 class SSTInfo:
-  def __init__(self, ID, level, size, key_start, key_end):
-    self.ID = ID
-    self.level = level
-    self.size = size
-    self.key_start = key_start
-    self.key_end = key_end
+  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation, ColFamily):
+    self.Level = (Level)
+    self.ID = (ID)
+    self.Size = Size
+    self.Key_Start = Key_Start
+    self.Key_End = Key_End
+    self.Creation = Creation
+    self.Deletion = -1
+    self.ColFamily = ColFamily
+    
+class AddInfo:
+  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation):
+    self.Level = int(Level)
+    self.ID = int(ID)
+    self.Size = Size
+    self.Key_Start = Key_Start
+    self.Key_End = Key_End
+    self.Creation = Creation
+    
+class DeleteInfo:
+  def __init__(self, Level, ID):
+    self.Level = int(Level)
+    self.ID = int(ID)
 
 def vprint(*args, **kwargs):
   print(*args, **kwargs)
@@ -24,90 +41,102 @@ def setup_argparse():
   parser.add_argument('-v', '--verbose', action='store_true', help='Print extra information to stdout', default=False)
 # RAID/RAIZN parameters
   parser.add_argument('-f', '--file', default="./manifest_sample", help='target file path (e.g. ./manifest_sample)', required=True)
-  parser.add_argument('-o', '--output', default="./convert_result", help='result file path (e.g. ./manifest_out)', required=False)
+  parser.add_argument('-o', '--output', default="./result", help='result file path (e.g. ./manifest_out)', required=False)
   return parser
 
+def getDictKey(Level, ID, ColFamily):
+  return ID * 10000 + ColFamily * 100 + Level
+
+def getIntKey(strKey):
+  result = 0
+  if strKey[-16:] == "3030303030303030":
+    result = int(strKey[:len(strKey) - 16], 16)
+  else:
+    result = int(strKey, 16)
+  return result
+
 def parse_data(file_path):
-  key_list = []
-  manifest = []
+  keyDict = {}
+  manifestDict = {}
 
   f = open(file_path, 'r')
+
+  AddInfoArr = []
+  DeleteInfoArr = []
+  TmpTime = 0
 
   line = f.readline()
   while True:
     if not line: break
 
-    if "leveldb" in line:
-      line = f.readline()
-    elif "level" in line:
+    if "AddFile:" in line:
       data = line.split()
-      level = data[1] + data[2]
-      while True:
-        line = f.readline()
-        if not line: break
-        if "level" in line: break
-        if "[" not in line: break
+      Level = data[1]
+      ID = data[2]
+      Size = data[3]
+      StartKey = getIntKey(data[4].split("'")[1])
+      EndKey = getIntKey(data[8].split("'")[1])
+      Creation = 0
+      for item in data:
+        if "file_creation_time:" in item:
+          Creation = int(item.split(":")[1])
+          break
+      AddInfoArr.append(AddInfo(Level, ID, Size, StartKey, EndKey, Creation))
+      if TmpTime == 0:
+        TmpTime = Creation
+    elif "DeleteFile:" in line:
+      data = line.split()
+      DeleteInfoArr.append(DeleteInfo(data[1], data[2]))
+    elif "ColumnFamily:" in line:
+      data = line.split()
+      curCF = int(data[1])
+      
+      for AddItem in AddInfoArr:
+        dictkey = getDictKey(AddItem.Level, AddItem.ID, curCF)
+        manifestDict[dictkey] = SSTInfo(AddItem.Level, 
+                                        AddItem.ID, 
+                                        AddItem.Size, 
+                                        AddItem.Key_Start, 
+                                        AddItem.Key_End, 
+                                        AddItem.Creation, curCF)
+        if curCF not in keyDict:
+          keyDict[curCF] = AddItem.Key_Start
         
-        data = line.split(":")
-        ID = data[0]
-        size = data[1].split("[")[0]
-        data = line.split("'")
-        key_start = data[1]
-        key_end = data[3]
+        keyDict[curCF] = min(AddItem.Key_Start, AddItem.Key_End, keyDict[curCF])
+              
+      for DeletedItem in DeleteInfoArr:
+        dictkey = getDictKey(DeletedItem.Level, DeletedItem.ID, curCF)
+        if dictkey in manifestDict:
+          manifestDict[dictkey].Deletion = TmpTime
+        else:
+          print("deletion log: missing SST!")
         
-        manifest.append(SSTInfo(ID, level, size, key_start, key_end))
-        if key_start not in key_list:
-          key_list.append(key_start)
-        if key_end not in key_list:
-          key_list.append(key_end)
-          
-        # for item in range(key_start, key_end + 1, 1):
-        #   if item not in key_list:
-        #     key_list.append(item)
-    else:
-      line = f.readline()
-  
+      AddInfoArr = []
+      DeleteInfoArr = []
+      TmpTime = 0
+      
+    line = f.readline()
   f.close()
   
-  common_suffix = ''
-  min_len = min(map(len, key_list))
-  
-  for i in range(1, min_len + 1):
-    if len(set(s[-i] for s in key_list)) == 1:
-      common_suffix = key_list[0][-i] + common_suffix
-    else:
-      break
-  
-  print(common_suffix)
-  
-  int_key_list = []
-  length = len(common_suffix)
-  for item in key_list:
-    l = len(item) - length
-    int_key_list.append(int(item[:l], 16))
-  
-  int_key_list.sort()
-  
-  return int_key_list, manifest, common_suffix
+  return keyDict, manifestDict
  
 def process(args):
-  key_list, manifest, common_suffix = parse_data(args.file)
+  keyDict, manifestDict = parse_data(args.file)
   
-  min_val = min(key_list)
-  
-  key_dict = {}
-  for item in key_list:
-    key_dict[item] = item - min_val + 1
-   
   f = open(OUTPUT, 'w')
-  f.write("SSTID level size key_start key_end\n")
-  
-  for item in manifest:
-    l = len(item.key_start) - len(common_suffix)
-    start_val = int(item.key_start[:l], 16)
-    l = len(item.key_end) - len(common_suffix)
-    end_val = int(item.key_end[:l], 16)
-    f.write("{} {} {} {} {}\n".format(item.ID, item.level, item.size, key_dict[start_val], key_dict[end_val]))
+  f.write("SSTID CF Level size Creation Deletion key_start key_end\n")
+ 
+  for key, item in manifestDict.items():
+    min_val = keyDict[item.ColFamily]
+   
+    f.write("{} {} {} {} {} {} {} {}\n".format(item.ID, 
+                                               item.ColFamily, 
+                                               item.Level, 
+                                               item.Size, 
+                                               item.Creation, 
+                                               item.Deletion, 
+                                               item.Key_Start - min_val, 
+                                               item.Key_End - min_val))
     
   f.close()
 
