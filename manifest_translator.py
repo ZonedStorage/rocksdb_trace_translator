@@ -108,12 +108,7 @@ def parse_data(file_path):
         if dictkey in manifestDict:
           # There is no deletion timestamp in the trace. However we know that
           # files become obsolete as soon as compaction finishes, which is
-          # approximately the time the last file was created by compaction.
-          #
-          # If the below assertion fails, it means there is a VersionEdit that
-          # only contains DeleteFile entries. If we need to handle that case, we
-          # should probably estimate deletion time according to AddFile entries
-          # in an adjacent VersionEdit.
+          # approximately the time the last file was created.
           assert LatestAddTime != -1
           manifestDict[dictkey].Deletion = LatestAddTime
         else:
@@ -121,7 +116,6 @@ def parse_data(file_path):
         
       AddInfoArr = []
       DeleteInfoArr = []
-      LatestAddTime = -1
       
     line = f.readline()
   f.close()
