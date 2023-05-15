@@ -63,7 +63,7 @@ def parse_data(file_path):
 
   AddInfoArr = []
   DeleteInfoArr = []
-  TmpTime = []
+  LatestAddTime = -1
 
   line = f.readline()
   while True:
@@ -82,14 +82,13 @@ def parse_data(file_path):
           Creation = int(item.split(":")[1])
           break
       AddInfoArr.append(AddInfo(Level, ID, Size, StartKey, EndKey, Creation))
-      TmpTime.append(Creation)
+      LatestAddTime = max(LatestAddTime, Creation)
     elif "DeleteFile:" in line:
       data = line.split()
       DeleteInfoArr.append(DeleteInfo(data[1], data[2]))
     elif "ColumnFamily:" in line:
       data = line.split()
       curCF = int(data[1])
-      idx = 0
       
       for AddItem in AddInfoArr:
         dictkey = getDictKey(AddItem.Level, AddItem.ID, curCF)
@@ -107,15 +106,16 @@ def parse_data(file_path):
       for DeletedItem in DeleteInfoArr:
         dictkey = getDictKey(DeletedItem.Level, DeletedItem.ID, curCF)
         if dictkey in manifestDict:
-          manifestDict[dictkey].Deletion = TmpTime[idx]
-          if idx < len(TmpTime) - 1:
-            idx += 1
+          # There is no deletion timestamp in the trace. However we know that
+          # files become obsolete as soon as compaction finishes, which is
+          # approximately the time the last file was created.
+          assert LatestAddTime != -1
+          manifestDict[dictkey].Deletion = LatestAddTime
         else:
           print("deletion log: missing SST!")
         
       AddInfoArr = []
       DeleteInfoArr = []
-      TmpTime = []
       
     line = f.readline()
   f.close()
