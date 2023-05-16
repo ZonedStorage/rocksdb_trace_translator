@@ -9,7 +9,7 @@ VERBOSE = None
 OUTPUT = None
 
 class SSTInfo:
-  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation, ColFamily):
+  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation, ColFamily, Create_Version):
     self.Level = (Level)
     self.ID = (ID)
     self.Size = Size
@@ -18,15 +18,18 @@ class SSTInfo:
     self.Creation = Creation
     self.Deletion = -1
     self.ColFamily = ColFamily
+    self.Create_Version = Create_Version
+    self.Delete_Version = -1
     
 class AddInfo:
-  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation):
+  def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation, Create_Version):
     self.Level = int(Level)
     self.ID = int(ID)
     self.Size = Size
     self.Key_Start = Key_Start
     self.Key_End = Key_End
     self.Creation = Creation
+    self.Create_Version = Create_Version
     
 class DeleteInfo:
   def __init__(self, Level, ID):
@@ -64,12 +67,15 @@ def parse_data(file_path):
   AddInfoArr = []
   DeleteInfoArr = []
   LatestAddTime = -1
+  VersionId = 0
 
   line = f.readline()
   while True:
     if not line: break
 
-    if "AddFile:" in line:
+    if "VersionEdit" in line:
+      VersionId += 1
+    elif "AddFile:" in line:
       data = line.split()
       Level = data[1]
       ID = data[2]
@@ -81,7 +87,7 @@ def parse_data(file_path):
         if "file_creation_time:" in item:
           Creation = int(item.split(":")[1])
           break
-      AddInfoArr.append(AddInfo(Level, ID, Size, StartKey, EndKey, Creation))
+      AddInfoArr.append(AddInfo(Level, ID, Size, StartKey, EndKey, Creation, VersionId))
       LatestAddTime = max(LatestAddTime, Creation)
     elif "DeleteFile:" in line:
       data = line.split()
@@ -97,7 +103,9 @@ def parse_data(file_path):
                                         AddItem.Size, 
                                         AddItem.Key_Start, 
                                         AddItem.Key_End, 
-                                        AddItem.Creation, curCF)
+                                        AddItem.Creation, 
+                                        curCF,
+                                        AddItem.Create_Version)
         if curCF not in keyDict:
           keyDict[curCF] = AddItem.Key_Start
         
@@ -111,6 +119,7 @@ def parse_data(file_path):
           # approximately the time the last file was created.
           assert LatestAddTime != -1
           manifestDict[dictkey].Deletion = LatestAddTime
+          manifestDict[dictkey].Delete_Version = VersionId
         else:
           print("deletion log: missing SST!")
         
@@ -126,19 +135,21 @@ def process(args):
   keyDict, manifestDict = parse_data(args.file)
   
   f = open(OUTPUT, 'w')
-  f.write("SSTID CF Level size Creation Deletion key_start key_end\n")
+  f.write("SSTID CF Level size Creation Deletion key_start key_end Create_Version Delete_Version\n")
  
   for key, item in manifestDict.items():
     min_val = keyDict[item.ColFamily]
    
-    f.write("{} {} {} {} {} {} {} {}\n".format(item.ID, 
-                                               item.ColFamily, 
-                                               item.Level, 
-                                               item.Size, 
-                                               item.Creation, 
-                                               item.Deletion, 
-                                               item.Key_Start - min_val, 
-                                               item.Key_End - min_val))
+    f.write("{} {} {} {} {} {} {} {} {} {}\n".format(item.ID, 
+                                                     item.ColFamily, 
+                                                     item.Level, 
+                                                     item.Size, 
+                                                     item.Creation, 
+                                                     item.Deletion, 
+                                                     item.Key_Start - min_val, 
+                                                     item.Key_End - min_val,
+                                                     item.Create_Version,
+                                                     item.Delete_Version))
     
   f.close()
 
