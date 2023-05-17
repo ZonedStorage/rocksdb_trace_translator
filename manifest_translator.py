@@ -51,12 +51,27 @@ def getDictKey(Level, ID, ColFamily):
   return ID * 10000 + ColFamily * 100 + Level
 
 def getIntKey(strKey):
-  result = 0
+  key_string = ""
   if strKey[-16:] == "3030303030303030":
-    result = int(strKey[:len(strKey) - 16], 16)
+    key_string = strKey[:len(strKey) - 16]
   else:
-    result = int(strKey, 16)
-  return result
+    key_string = strKey
+    
+  if len(key_string) > 16:
+    print("key length larger than 8 bytes!\n")    
+
+  offset = 0
+  padding = ""
+  length = int(len(key_string) / 2)
+  for idx in range(length):
+    if key_string[(idx*2):((idx*2)+ 2)] == "00":
+      offset += 2
+      padding += "00"
+    else:
+      break
+  key_string = key_string[offset:] + padding
+    
+  return int(key_string, 16)
 
 def parse_data(file_path):
   keyDict = {}
