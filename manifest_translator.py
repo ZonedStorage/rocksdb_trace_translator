@@ -183,6 +183,7 @@ def parse_data(file_path):
   
   # sorting encoding table
   MappingTbl.sort()
+  max_key_len = max_keylength
   if max_keylength % 2 == 1:
     max_keylength += 1
   
@@ -225,12 +226,18 @@ def parse_data(file_path):
     item.Key_End_Int = convertIntRange(val, ratioInt)
     item.Key_End_Float = convertFloatRange(val, ratioFloat)
   
-  return keyDict, manifestDict
+  return keyDict, manifestDict, max_key_len, MappingTbl
  
 def process(args):
-  keyDict, manifestDict = parse_data(args.file)
+  keyDict, manifestDict, max_len, MappingTbl = parse_data(args.file)
   
   f = open(OUTPUT, 'w')
+  f.write(f"maxlength: {max_len}\n")
+  out = "Encoding Info: "
+  for item in MappingTbl:
+    out += f"{item}, "
+  out += "\n"
+  f.write(out)
   f.write("SSTID CF Level size Creation Deletion key_start key_end key_start_float key_end_float Create_Version Delete_Version\n")
  
   for key, item in manifestDict.items():
