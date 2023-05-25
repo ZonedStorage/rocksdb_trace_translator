@@ -20,6 +20,10 @@ class SSTInfo:
     self.ColFamily = ColFamily
     self.Create_Version = Create_Version
     self.Delete_Version = -1
+    self.Key_Start_Int = 0
+    self.Key_End_Int = 0
+    self.Key_Start_Float = 0.0
+    self.Key_End_Float = 0.0
     
 class AddInfo:
   def __init__(self, Level, ID, Size, Key_Start, Key_End, Creation, Create_Version):
@@ -50,28 +54,54 @@ def setup_argparse():
 def getDictKey(Level, ID, ColFamily):
   return ID * 10000 + ColFamily * 100 + Level
 
-def getIntKey(strKey):
-  key_string = ""
-  if strKey[-16:] == "3030303030303030":
-    key_string = strKey[:len(strKey) - 16]
-  else:
-    key_string = strKey
-    
-  if len(key_string) > 16:
-    print("key length larger than 8 bytes!\n")    
+def convertIntRange(val, ratio):
+  if val == 0:
+    return 0
+  return val // ratio
 
+def convertFloatRange(val, ratio):
+  if val == 0:
+    return 0.0
+  return val / ratio
+
+def getEncodeValue(MappingTbl, max_len, Key):
+  length = len(Key)
   offset = 0
-  padding = ""
-  length = int(len(key_string) / 2)
-  for idx in range(length):
-    if key_string[(idx*2):((idx*2)+ 2)] == "00":
-      offset += 2
-      padding += "00"
-    else:
-      break
-  key_string = key_string[offset:] + padding
+  encode_length = len(MappingTbl)
+  result = 0
+  
+  if length % 2 == 1:
+    val = int(Key[0:1], 16)
+    result = val
+    offset = 1
+    max_len -= 2
+  
+  while offset < length:
+    val = int(Key[offset:offset+2], 16)
+    result = (result * encode_length) + val
+    offset += 2
+    max_len -= 2
     
-  return int(key_string, 16)
+  while max_len > 0:
+    result *= encode_length
+    max_len -= 2
+  
+  return result
+
+def generate_map(MappingTbl, Key):
+  length = len(Key)
+  offset = 0
+  if length % 2 == 1:
+    val = int(Key[0:1], 16)
+    if val not in MappingTbl:
+      MappingTbl.append(val)
+    offset = 1
+    
+  while offset < length:
+    val = int(Key[offset:offset+2], 16)
+    if val not in MappingTbl:
+      MappingTbl.append(val)
+    offset += 2
 
 def parse_data(file_path):
   keyDict = {}
@@ -79,10 +109,13 @@ def parse_data(file_path):
 
   f = open(file_path, 'r')
 
+  MappingTbl = [0]
+
   AddInfoArr = []
   DeleteInfoArr = []
   LatestAddTime = -1
   VersionId = 0
+  max_keylength = 0
 
   line = f.readline()
   while True:
@@ -95,8 +128,12 @@ def parse_data(file_path):
       Level = data[1]
       ID = data[2]
       Size = data[3]
-      StartKey = getIntKey(data[4].split("'")[1])
-      EndKey = getIntKey(data[8].split("'")[1])
+      StartKey = (data[4].split("'")[1])
+      EndKey = (data[8].split("'")[1])
+      max_keylength = max(max_keylength, len(StartKey), len(EndKey))
+      generate_map(MappingTbl, StartKey)
+      generate_map(MappingTbl, EndKey)
+      
       Creation = 0
       for item in data:
         if "file_creation_time:" in item:
@@ -144,25 +181,71 @@ def parse_data(file_path):
     line = f.readline()
   f.close()
   
+  # sorting encoding table
+  MappingTbl.sort()
+  if max_keylength % 2 == 1:
+    max_keylength += 1
+  
+  min_val = -1
+  max_val = 0
+  # get max, min encoded value
+  for key, item in manifestDict.items():
+    val = getEncodeValue(MappingTbl, max_keylength, item.Key_Start)
+    if min_val == -1:
+      min_val = val
+    min_val = min(min_val, val)
+    max_val = max(max_val, val)
+    
+    val = getEncodeValue(MappingTbl, max_keylength, item.Key_End)
+    min_val = min(min_val, val)
+    max_val = max(max_val, val)
+  
+  max_val -= min_val
+  
+  maxInt = 2**64 - 1
+  maxFloat = int(sys.float_info.max) - 1
+  
+  ratioInt = 1
+  if maxInt < max_val:
+    ratioInt = max_val // maxInt
+
+  ratioFloat = 1
+  if maxFloat < max_val:
+    ratioFloat = max_val // maxFloat  
+    
+  # convert Int, Float range (8 Bytes limit)
+  for key, item in manifestDict.items():
+    val = getEncodeValue(MappingTbl, max_keylength, item.Key_Start)
+    val -= min_val
+    item.Key_Start_Int = convertIntRange(val, ratioInt)
+    item.Key_Start_Float = convertFloatRange(val, ratioFloat)
+    
+    val = getEncodeValue(MappingTbl, max_keylength, item.Key_End)
+    val -= min_val
+    item.Key_End_Int = convertIntRange(val, ratioInt)
+    item.Key_End_Float = convertFloatRange(val, ratioFloat)
+  
   return keyDict, manifestDict
  
 def process(args):
   keyDict, manifestDict = parse_data(args.file)
   
   f = open(OUTPUT, 'w')
-  f.write("SSTID CF Level size Creation Deletion key_start key_end Create_Version Delete_Version\n")
+  f.write("SSTID CF Level size Creation Deletion key_start key_end key_start_float key_end_float Create_Version Delete_Version\n")
  
   for key, item in manifestDict.items():
     min_val = keyDict[item.ColFamily]
    
-    f.write("{} {} {} {} {} {} {} {} {} {}\n".format(item.ID, 
+    f.write("{} {} {} {} {} {} {} {} {} {} {} {}\n".format(item.ID, 
                                                      item.ColFamily, 
                                                      item.Level, 
                                                      item.Size, 
                                                      item.Creation, 
                                                      item.Deletion, 
-                                                     item.Key_Start - min_val, 
-                                                     item.Key_End - min_val,
+                                                     item.Key_Start_Int, 
+                                                     item.Key_End_Int,
+                                                     item.Key_Start_Float, 
+                                                     item.Key_End_Float,
                                                      item.Create_Version,
                                                      item.Delete_Version))
     
